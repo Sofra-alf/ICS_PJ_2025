@@ -6,7 +6,7 @@ class Y86_Simulator:
         self.registers = [0] * 15
         #寄存器由数字保存，将对应的寄存器存到对应索引中
         self.memory = {}
-        self.ZF = 0
+        self.ZF = 1
         self.SF = 0
         self.OF = 0
 
@@ -34,9 +34,15 @@ class Y86_Simulator:
             0xB: self.popq       # popq
         }
 
+    def get_memory(self, address):
+        if address < 0:
+            return
+        data = self.memory.get(address, 0)
+        return data
+
 
     def get_byte(self, address):
-        return self.memory.get(address, 0) & 0xFF #异常输出0
+        return self.get_memory(address) & 0xFF #异常输出0
 
     def get_front4bit(self, address):
         byte = self.get_byte(address)
@@ -62,6 +68,10 @@ class Y86_Simulator:
             return
         if reg_num < 15:  # 0xF 表示无寄存器,不设置
             self.registers[reg_num] = value
+        if value < 0:
+            self.status = 3
+        return
+
 
     #读取地址后8byte的数据
     def get_8byte(self, address):
@@ -72,6 +82,8 @@ class Y86_Simulator:
         return result
     
     def write_8byte(self, address, value):
+        if address < 0:
+            return
         for i in range(8):
             byte = (value >> (i * 8)) & 0xFF
             self.memory[address + i] = byte
@@ -83,9 +95,14 @@ class Y86_Simulator:
             return value - (1 << 64)
         return value
     
+    def add(self, a, b):
+        return (a + b) & 0xFFFFFFFFFFFFFFFF
+    
+    def sub(self, a, b):
+        return (a - b) & 0xFFFFFFFFFFFFFFFF
+    
     def halt(self):
         self.status = 2
-        self.PC += 1
         return
     
     def nop(self):
@@ -137,7 +154,7 @@ class Y86_Simulator:
         regB = self.get_back4bit(self.PC + 1)
         displacement = self.get_8byte(self.PC + 2)
 
-        address = self.get_register(regB) + displacement
+        address = self.add(self.get_register(regB), displacement)
         value = self.get_register(regA)
         self.write_8byte(address, value)
 
@@ -149,7 +166,7 @@ class Y86_Simulator:
         regB = self.get_back4bit(self.PC + 1)
         displacement = self.get_8byte(self.PC + 2)
 
-        address = self.get_register(regB) + displacement
+        address = self.add(self.get_register(regB), displacement)
         if address == 0:
             self.status = 3
             self.PC += 10
@@ -171,9 +188,9 @@ class Y86_Simulator:
         result = 0
 
         if func == 0x0: #addq
-            result = valB + valA
+            result = self.add(valB, valA)
         elif func == 0x1: #subq
-            result = valB - valA
+            result = self.sub(valB, valA)
         elif func == 0x2: #andq
             result = valB & valA
         elif func == 0x3: #xorq
@@ -272,9 +289,10 @@ class Y86_Simulator:
 
         rsp = self.get_register(4)
         valM = self.get_8byte(rsp)
-        self.set_register(regA, valM)
         rsp += 8
         self.set_register(4, rsp)
+        self.set_register(regA, valM)
+        
 
         self.PC += 2
         return
@@ -327,8 +345,8 @@ class Y86_Simulator:
     def save_states(self):
         """保存当前模拟器状态到历史记录"""
         # 创建寄存器字典（适配列表格式）
-        reg_names = ["%rax", "%rcx", "%rdx", "%rbx", "%rsp", "%rbp", "%rsi", "%rdi",
-                     "%r8", "%r9", "%r10", "%r11", "%r12", "%r13", "%r14"]
+        reg_names = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
+                     "r8", "r9", "r10", "r11", "r12", "r13", "r14"]
         registers_dict = {reg_names[i]: self.registers[i] for i in range(15)}
 
         # 检查状态是否与上一次相同，避免保存重复状态
@@ -460,15 +478,18 @@ class Y86_Simulator:
                 self.save_states()
                 break
 
+            old_PC = self.PC
             # 解码并执行指令
             self.fetch()
+
+            # 检查是否应该停止
+            if self.status != 1:
+                self.PC = old_PC
 
             # 保存执行后状态（每条指令执行后保存）
             self.save_states()
 
-            # 检查是否应该停止
-            if self.status != 1:
-                break
+            
 
         return self.states
 
@@ -484,6 +505,8 @@ def main():
 
     # 运行模拟器并获取状态历史
     states_history = CPU.run(input_file)
+    if states_history:
+        states_history = states_history[1:]
 
     # 以JSON格式输出到标准输出
     json.dump(states_history, sys.stdout, indent=4)
