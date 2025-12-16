@@ -67,9 +67,8 @@ class Y86_Simulator:
             self.status = 4  # 非法寄存器编号 -> 非法指令
             return
         if reg_num < 15:  # 0xF 表示无寄存器,不设置
-            self.registers[reg_num] = value
-        if value < 0:
-            self.status = 3
+            # 确保值在64位范围内
+            self.registers[reg_num] = value & 0xFFFFFFFFFFFFFFFF
         return
 
 
@@ -82,18 +81,47 @@ class Y86_Simulator:
         return result
     
     def write_8byte(self, address, value):
+        """写入8字节到内存,负地址会设置错误状态"""
         if address < 0:
-            return
+            self.status = 3  # 地址错误
+            return False
         for i in range(8):
             byte = (value >> (i * 8)) & 0xFF
             self.memory[address + i] = byte
-        return
+        return True
 
     def to_signed(self, value):
         """将64位无符号数转换为有符号数"""
         if value >= (1 << 63):  # 如果最高位是1
             return value - (1 << 64)
         return value
+
+    def check_condition(self, func_code):
+        """根据功能码检查条件码,返回条件是否满足
+
+        Args:
+            func_code: 条件码 (0x0-0x6)
+
+        Returns:
+            True/False: 条件是否满足
+            None: 非法的功能码
+        """
+        if func_code == 0x0:  # 无条件 (rrmovq/jmp)
+            return True
+        elif func_code == 0x1:  # le (<=)
+            return (self.SF ^ self.OF) | self.ZF
+        elif func_code == 0x2:  # l (<)
+            return self.SF ^ self.OF
+        elif func_code == 0x3:  # e (==)
+            return self.ZF
+        elif func_code == 0x4:  # ne (!=)
+            return not self.ZF
+        elif func_code == 0x5:  # ge (>=)
+            return not (self.SF ^ self.OF)
+        elif func_code == 0x6:  # g (>)
+            return not (self.SF ^ self.OF) and not self.ZF
+        else:
+            return None  # 非法功能码
     
     def add(self, a, b):
         return (a + b) & 0xFFFFFFFFFFFFFFFF
@@ -114,22 +142,8 @@ class Y86_Simulator:
         regA = self.get_front4bit(self.PC + 1)
         regB = self.get_back4bit(self.PC + 1)
 
-        con = False
-        if func == 0x0: #rrmovq
-            con = True
-        elif func == 0x1: #cmovle
-            con = (self.SF ^ self.OF) | self.ZF
-        elif func == 0x2: #cmovl
-            con = self.SF ^ self.OF
-        elif func == 0x3: #cmove
-            con = self.ZF
-        elif func == 0x4: #cmovne
-            con = not self.ZF
-        elif func == 0x5: #cmovge
-            con = not (self.SF ^ self.OF)
-        elif func == 0x6: #cmovg
-            con = not (self.SF ^ self.OF) and not self.ZF
-        else:
+        con = self.check_condition(func)
+        if con is None:  # 非法功能码
             self.status = 4
             self.PC += 2
             return
@@ -224,30 +238,15 @@ class Y86_Simulator:
         func = self.get_back4bit(self.PC)
         destination = self.get_8byte(self.PC + 1)
 
-        con = False
-        if func == 0x0: #jmp
-            con = True
-        elif func == 0x1: #jle
-            con = (self.SF ^ self.OF) | self.ZF
-        elif func == 0x2: #jl
-            con = self.SF ^ self.OF
-        elif func == 0x3: #je
-            con = self.ZF
-        elif func == 0x4: #jne
-            con = not self.ZF
-        elif func == 0x5: #jge
-            con = not (self.SF ^ self.OF)
-        elif func == 0x6: #jg
-            con = not (self.SF ^ self.OF) and not self.ZF
-        else:
+        con = self.check_condition(func)
+        if con is None:  # 非法功能码
             self.status = 4
             self.PC += 9
             return
-        
+
         if con:
-            self.PC = destination #可能非法地址
-            if self.memory.get(self.PC, 0) == 0:
-                self.status = 3
+            self.PC = destination
+            # 非法地址检查将在下一次 fetch() 时进行
         else:
             self.PC += 9
         return
@@ -424,26 +423,21 @@ class Y86_Simulator:
 
     def fetch(self):
         """取指令并执行"""
-        try:
-            head = self.memory.get(self.PC, None)
+        head = self.memory.get(self.PC, None)
 
-            # 检查是否访问了无效内存地址
-            if head is None:
-                self.status = 3  # 内存访问错误
-                return
-
-            # 提取操作码(高4位)
-            opcode = (head >> 4) & 0xF
-
-            # 根据操作码调用对应的指令处理函数
-            if opcode in self.head_map:
-                self.head_map[opcode]()
-            else:
-                self.status = 4  # 非法指令
-
-#还有一种方案：在get_byte等内存访问函数中捕获内存访问异常
-        except Exception:
+        # 检查是否访问了无效内存地址
+        if head is None:
             self.status = 3  # 内存访问错误
+            return
+
+        # 提取操作码(高4位)
+        opcode = (head >> 4) & 0xF
+
+        # 根据操作码调用对应的指令处理函数
+        if opcode in self.head_map:
+            self.head_map[opcode]()
+        else:
+            self.status = 4  # 非法指令
 
     def run(self, program_input):
         """运行模拟器
