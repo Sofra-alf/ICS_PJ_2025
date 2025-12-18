@@ -63,15 +63,12 @@ class Y86_Simulator:
 
     # ---------------- 内存访问 ----------------
 
-    def get_memory(self, address):
-        """读取单字节内存"""
-        if address < 0:
-            return None
-        return self.memory.get(address, 0)
-
     def get_byte(self, address):
         """读取单字节(带异常处理)"""
-        result = self.get_memory(address)
+        if address < 0:
+            self.status = 3
+            return None
+        result = self.memory.get(address, 0)
         return result & 0xFF if result is not None else 0
 
     def get_8byte(self, address):
